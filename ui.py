@@ -1,40 +1,17 @@
-"""
-PdfDoc2Markdown – Streamlit UI skeleton (no processing logic yet)
-
-How to run
------------
-1) (Optional) Create a virtualenv
-   python -m venv .venv && source .venv/bin/activate   # Windows: .venv\\Scripts\\activate
-2) Install deps
-   pip install -r requirements.txt
-   # or: pip install streamlit pypdf
-3) Start the app
-   streamlit run app.py
-
------
-- The app is split vertically into Tool / Input / Output with a default 20% / 40% / 40% layout.
-- Users can customize the ratios in "Layout Options".
-- Only the UI is wired up; the "Run" button does not perform conversion yet.
-"""
-
 from __future__ import annotations
-
 import uuid
 from pathlib import Path
 from utils import render_query_builder, pick_folder
 import io
 from streamlit.runtime.scriptrunner import add_script_run_ctx
-from test import get_cis_recommendation_mappings, get_markdown_from_cis_section
+from pdf2markdown import get_cis_recommendation_mappings, get_markdown_from_cis_section
 import re
 import os
 import queue
 import threading
-
 from dataclasses import dataclass, asdict, field
 from typing import Optional, Tuple, Callable, List, Dict
 import streamlit as st
-from streamlit_file_browser import st_file_browser
-from streamlit_autorefresh import st_autorefresh
 
 # -------------------------------
 # Config & Data
@@ -43,7 +20,8 @@ DEFAULT_LAYOUT = (20, 40, 40)  # percentages
 
 @dataclass
 class ToolInfo:
-    def __init__(self, tool_name, about, settings, input_builder, outputs, output_builder):
+    def __init__(self, title, tool_name, about, settings, input_builder, outputs, output_builder):
+        self.title = title
         self.tool_name = tool_name
         self.about = about
         self.settings = settings
@@ -148,10 +126,9 @@ def build_PdfDoc2Markdown_input_section(app):
         app.session_state.settings.output_folder = output_folder
 
 
-
-
 PdfDoc2MarkdownToolInfo = ToolInfo(**{
     "tool_name": "PdfDoc2Markdown",
+    "title": "🧰 PdfDoc2Markdown",
     "about": "Convert PDF documents to Markdown tables",
     "settings": PdfDoc2MarkdownSettings(),
     "input_builder": build_PdfDoc2Markdown_input_section,
@@ -171,9 +148,19 @@ def run_generation(app, gpt_key, out_dir: Path, job_id: str):
     # mark done
     st.session_state.gen_job["running"] = False
 
+IntuneAssessmentToolInfo = ToolInfo(**{
+    "tool_name": "IntuneAssessmentTool",
+    "title": "🧰 Intune Assessment Tool",
+    "about": "Tool to compare baseline policies against a customers tenant",
+    "settings": None,
+    "input_builder": lambda: None,
+    "outputs": None,
+    "output_builder": None,
+})
 
-INIT_TOOL = PdfDoc2MarkdownToolInfo
-ALL_TOOLS = {t.tool_name: t for t in [PdfDoc2MarkdownToolInfo]}
+
+ACTIVE_TOOL = PdfDoc2MarkdownToolInfo
+ALL_TOOLS = {t.tool_name: t for t in [PdfDoc2MarkdownToolInfo, IntuneAssessmentToolInfo]}
 
 # -------------------------------
 # UI Helpers
@@ -188,79 +175,22 @@ def init_state():
     :return:
     """
     if "tool" not in st.session_state:
-        st.session_state.tool = INIT_TOOL
+        st.session_state.tool = ACTIVE_TOOL
     if "settings" not in st.session_state:
-        st.session_state.settings = INIT_TOOL.settings
+        st.session_state.settings = ACTIVE_TOOL.settings
     if "layout" not in st.session_state:
         st.session_state.layout = DEFAULT_LAYOUT
     if "outputs" not in st.session_state:
-        st.session_state.outputs = INIT_TOOL.outputs
+        st.session_state.outputs = ACTIVE_TOOL.outputs
     if "gen" not in st.session_state:
         st.session_state.gen = {"running": False, "total": 0, "out_dir": ""}
     if "outputs_lock" not in st.session_state:
         st.session_state.outputs_lock = threading.Lock()
 
-
-def layout_controls():
-    """
-    Allows user resizing of the content sections
-    # TODO: Fix, is buggy (low pri) - better if done by dragging section edges
-    :return:
-    """
-    with st.expander("Layout Options", expanded=False):
-        mode = st.radio(
-            "Layout mode",
-            ("Default (20 / 40 / 40)", "Custom"),
-            index=0,
-            horizontal=True,
-        )
-        if mode.startswith("Default"):
-            st.session_state.layout = DEFAULT_LAYOUT
-        else:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                left = st.number_input("Tool %", min_value=5, max_value=60, value=st.session_state.layout[0], step=1)
-            with c2:
-                mid = st.number_input("Input %", min_value=10, max_value=80, value=st.session_state.layout[1], step=1)
-            with c3:
-                right = st.number_input("Output %", min_value=10, max_value=85, value=st.session_state.layout[2], step=1)
-
-            total = max(1, left + mid + right)
-            # Normalize to sum ~100 while keeping proportions
-            left_n = round(left / total * 100)
-            mid_n = round(mid / total * 100)
-            right_n = 100 - left_n - mid_n
-            st.session_state.layout = (left_n, mid_n, right_n)
-
-        st.caption(f"Current layout: {st.session_state.layout[0]}% / {st.session_state.layout[1]}% / {st.session_state.layout[2]}%")
-
-
-# Simple boolean search helper (UI preview only)
-# "and" binds tighter than "or"
-
-def compile_boolean_query(q: str) -> Tuple[Callable[[str], bool], List[str]]:
-    # TODO: Replace with chaining
-    q = (q or "").strip()
-    if not q:
-        return (lambda _: True), []
-
-    or_parts = [p.strip() for p in re.split(r"\bor\b", q, flags=re.IGNORECASE) if p.strip()]
-    groups: List[List[str]] = []
-    for part in or_parts:
-        groups.append([t.strip() for t in re.split(r"\band\b", part, flags=re.IGNORECASE) if t.strip()])
-
-    def pred(text: str) -> bool:
-        t = text.lower()
-        return any(all(term.lower() in t for term in g) for g in groups)
-
-    flat_terms = [t for g in groups for t in g]
-    return pred, flat_terms
-
-
 # -------------------------------
 # Page Setup
 # -------------------------------
-st.set_page_config(page_title="PdfDoc2Markdown", layout="wide")
+st.set_page_config(page_title=ACTIVE_TOOL.tool_name, layout="wide")
 init_state()
 
 # Light CSS polish
@@ -275,8 +205,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("🧰 PdfDoc2Markdown")
-layout_controls()
+st.title(ACTIVE_TOOL.title)
 
 # Column ratios mapped from percentages to relative weights
 l, m, r = st.session_state.layout

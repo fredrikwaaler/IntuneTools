@@ -2,5 +2,4 @@ streamlit
 streamlit-autorefresh
 PyPDF2
 openai
-
-
+tiktoken
